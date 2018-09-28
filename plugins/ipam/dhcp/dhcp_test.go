@@ -100,13 +100,27 @@ const (
 )
 
 var _ = BeforeSuite(func() {
-	println("mcc:  BeforeSuite deleted socketPath at: ", time.Now().String())
+	_, errBefore := os.Stat(socketPath)
+	if errBefore != nil {
+	   println("mcc: BeforeSuite - socketPath not found - call remove anyway at: ",
+	   time.Now().String())
+	} else {
+	  println("mcc: BeforeSuite did find socketPath and removed it at: ",
+	  time.Now().String())
+	}
 	os.Remove(socketPath)
 	os.Remove(pidfilePath)
 })
 
 var _ = AfterSuite(func() {
-	println("mcc:  AfterSuite deleted socketPath at: ", time.Now().String())
+	_, errAfter := os.Stat(socketPath)
+	if errAfter != nil {
+	   println("mcc: AfterSuite - socketPath not found - call remove anyway at: ",
+	   time.Now().String())
+	} else {
+	  println("mcc: AfterSuite did find socketPath and removed it at: ",
+	  time.Now().String())
+	}
 	os.Remove(socketPath)
 	os.Remove(pidfilePath)
 })
@@ -227,7 +241,14 @@ var _ = Describe("DHCP Operations", func() {
 
 		Expect(originalNS.Close()).To(Succeed())
 		Expect(targetNS.Close()).To(Succeed())
-		println("mcc:  AfterEach deleted socketPath at: ", time.Now().String())
+		_, errAfterEach := os.Stat(socketPath)
+		if errAfterEach != nil {
+	   	   println("mcc: AfterEach - socketPath not found - call remove anyway at: ",
+	   	   time.Now().String())
+		} else {
+		  println("mcc: AfterEach did find socketPath and removed it at: ",
+		  time.Now().String())
+		}
 		os.Remove(socketPath)
 		os.Remove(pidfilePath)
 	})
