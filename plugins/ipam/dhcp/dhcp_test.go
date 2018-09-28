@@ -95,16 +95,18 @@ func dhcpServerStart(netns ns.NetNS, leaseIP, serverIP net.IP, stopCh <-chan boo
 
 const (
 	hostVethName string = "dhcp0"
-	contVethName string = "eth0"
+	contVethName string = "mccdbg0"
 	pidfilePath  string = "/var/run/cni/dhcp-client.pid"
 )
 
 var _ = BeforeSuite(func() {
+	println("mcc:  BeforeSuite deleted socketPath at: ", time.Now().String())
 	os.Remove(socketPath)
 	os.Remove(pidfilePath)
 })
 
 var _ = AfterSuite(func() {
+	println("mcc:  AfterSuite deleted socketPath at: ", time.Now().String())
 	os.Remove(socketPath)
 	os.Remove(pidfilePath)
 })
@@ -122,9 +124,11 @@ var _ = Describe("DHCP Operations", func() {
 		var err error
 		originalNS, err = testutils.NewNS()
 		Expect(err).NotTo(HaveOccurred())
+		println("mcc: originalNS is ", originalNS.Path())
 
 		targetNS, err = testutils.NewNS()
 		Expect(err).NotTo(HaveOccurred())
+		println("mcc: targetNS is ", targetNS.Path())
 
 		serverIP := net.IPNet{
 			IP:   net.IPv4(192, 168, 1, 1),
@@ -182,6 +186,13 @@ var _ = Describe("DHCP Operations", func() {
 		// Start the DHCP server
 		dhcpServerDone, err = dhcpServerStart(originalNS, net.IPv4(192, 168, 1, 5), serverIP.IP, dhcpServerStopCh)
 		Expect(err).NotTo(HaveOccurred())
+		println("mcc: dhcpServerStart-ed! at ", time.Now().String())
+		_, errStartSP := os.Stat(socketPath)
+		if errStartSP != nil {
+			println("mcc: socketPath dhcpServerStart error - socketPath not created?? - time = ", time.Now().String())
+		} else {
+			println("mcc: socketPath dhcpServerStart DID create socketPath - time = ", time.Now().String())
+		}
 
 		// Start the DHCP client daemon
 		os.MkdirAll(pidfilePath, 0755)
@@ -192,11 +203,17 @@ var _ = Describe("DHCP Operations", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(clientCmd.Process).NotTo(BeNil())
 
+		start := time.Now()
+		println("mcc: Starting to wait for socket")
 		// Wait up to 15 seconds for the client socket
 		Eventually(func() bool {
 			_, err := os.Stat(socketPath)
 			return err == nil
 		}, time.Second*15, time.Second/4).Should(BeTrue())
+		stop := time.Now()
+		diff := stop.Sub(start)
+		println("mcc: Time waited for socketPath (nanoseconds) was: ", diff.Nanoseconds())
+		println("mcc: Time waited for socketPath (seconds) was: ", diff.Seconds())
 	})
 
 	AfterEach(func() {
@@ -207,6 +224,7 @@ var _ = Describe("DHCP Operations", func() {
 
 		Expect(originalNS.Close()).To(Succeed())
 		Expect(targetNS.Close()).To(Succeed())
+		println("mcc:  AfterEach deleted socketPath at: ", time.Now().String())
 		os.Remove(socketPath)
 		os.Remove(pidfilePath)
 	})
@@ -233,6 +251,12 @@ var _ = Describe("DHCP Operations", func() {
 			defer GinkgoRecover()
 
 			r, _, err := testutils.CmdAddWithArgs(args, func() error {
+				_, errAddSP := os.Stat(socketPath)
+				if errAddSP != nil {
+					println("mcc: socketPath Add error - socketPath not found", errAddSP)
+				} else {
+					println("mcc: socketPath Add did find socketPath", errAddSP)
+				}
 				return cmdAdd(args)
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -247,6 +271,12 @@ var _ = Describe("DHCP Operations", func() {
 
 		err = originalNS.Do(func(ns.NetNS) error {
 			return testutils.CmdDelWithArgs(args, func() error {
+				_, errDelSP := os.Stat(socketPath)
+				if errDelSP != nil {
+					println("mcc: socketPath Del error - socketPath not found", errDelSP)
+				} else {
+					println("mcc: socketPath Del did find socketPath", errDelSP)
+				}
 				return cmdDel(args)
 			})
 		})
@@ -275,6 +305,12 @@ var _ = Describe("DHCP Operations", func() {
 			defer GinkgoRecover()
 
 			r, _, err := testutils.CmdAddWithArgs(args, func() error {
+				_, errAddSP := os.Stat(socketPath)
+				if errAddSP != nil {
+					println("mcc: socketPath Add error - socketPath not found", errAddSP)
+				} else {
+					println("mcc: socketPath Add did find socketPath", errAddSP)
+				}
 				return cmdAdd(args)
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -301,6 +337,12 @@ var _ = Describe("DHCP Operations", func() {
 
 				err = originalNS.Do(func(ns.NetNS) error {
 					return testutils.CmdDelWithArgs(args, func() error {
+						_, errDel1SP := os.Stat(socketPath)
+						if errDel1SP != nil {
+							println("mcc: socketPath Del 1 error - socketPath not found", errDel1SP)
+						} else {
+							println("mcc: socketPath Del 1 did find socketPath", errDel1SP)
+						}
 						return cmdDel(args)
 					})
 				})
@@ -312,6 +354,12 @@ var _ = Describe("DHCP Operations", func() {
 
 		err = originalNS.Do(func(ns.NetNS) error {
 			return testutils.CmdDelWithArgs(args, func() error {
+				_, errDel2SP := os.Stat(socketPath)
+				if errDel2SP != nil {
+					println("mcc: socketPath Del 2 error - socketPath not found", errDel2SP)
+				} else {
+					println("mcc: socketPath Del 2 did find socketPath", errDel2SP)
+				}
 				return cmdDel(args)
 			})
 		})

@@ -21,6 +21,7 @@ import (
 	"net/rpc"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
@@ -39,6 +40,7 @@ func main() {
 		daemonFlags.StringVar(&hostPrefix, "hostprefix", "", "optional prefix to netns")
 		daemonFlags.Parse(os.Args[2:])
 
+		println("mcc: Calling runDaemon at: ", time.Now().String())
 		if err := runDaemon(pidfilePath, hostPrefix); err != nil {
 			log.Printf(err.Error())
 			os.Exit(1)

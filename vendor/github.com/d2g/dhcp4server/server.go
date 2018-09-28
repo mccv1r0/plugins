@@ -7,12 +7,15 @@ import (
 	"net"
 	"sync/atomic"
 	"time"
+	"os"
 
 	"github.com/d2g/dhcp4"
 	"github.com/d2g/dhcp4server/leasepool"
 
 	"golang.org/x/net/ipv4"
 )
+
+const socketPath = "/run/cni/dhcp.sock"
 
 /*
  * The DHCP Server Structure
@@ -176,6 +179,13 @@ func (s *Server) ListenAndServe() error {
 	buffer := make([]byte, 576)
 
 	log.Println("Trace: DHCP Server Listening.")
+	_, errStartSP := os.Stat(socketPath)
+	if errStartSP != nil {
+		log.Println("Trace: mcc: ListenAndServe() did NOT find socketPath, at time = ", time.Now().String())
+	} else {
+		log.Println("Trace: mcc: ListenAndServe() DID find socketPath, at time = ", time.Now().String())
+	}
+
 
 	for {
 	ListenForDHCPPackets:
