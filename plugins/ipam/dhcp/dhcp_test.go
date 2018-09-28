@@ -124,6 +124,7 @@ var _ = Describe("DHCP Operations", func() {
 		var err error
 		originalNS, err = testutils.NewNS()
 		Expect(err).NotTo(HaveOccurred())
+		println("mcc: BeforeEach: invoked at ", time.Now().String())
 		println("mcc: originalNS is ", originalNS.Path())
 
 		targetNS, err = testutils.NewNS()
@@ -189,9 +190,11 @@ var _ = Describe("DHCP Operations", func() {
 		println("mcc: dhcpServerStart-ed! at ", time.Now().String())
 		_, errStartSP := os.Stat(socketPath)
 		if errStartSP != nil {
-			println("mcc: socketPath dhcpServerStart error - socketPath not created?? - time = ", time.Now().String())
+			println("mcc: socketPath dhcpServerStart error - socketPath not created?? - time = ",
+			time.Now().String())
 		} else {
-			println("mcc: socketPath dhcpServerStart DID create socketPath - time = ", time.Now().String())
+			println("mcc: socketPath dhcpServerStart DID create socketPath - time = ",
+			time.Now().String())
 		}
 
 		// Start the DHCP client daemon
@@ -246,6 +249,7 @@ var _ = Describe("DHCP Operations", func() {
 			StdinData:   []byte(conf),
 		}
 
+		println("mcc: It number 1: invoked at ", time.Now().String())
 		var addResult *current.Result
 		err := originalNS.Do(func(ns.NetNS) error {
 			defer GinkgoRecover()
@@ -253,9 +257,11 @@ var _ = Describe("DHCP Operations", func() {
 			r, _, err := testutils.CmdAddWithArgs(args, func() error {
 				_, errAddSP := os.Stat(socketPath)
 				if errAddSP != nil {
-					println("mcc: socketPath Add error - socketPath not found", errAddSP)
+					println("mcc: socketPath Add error - socketPath not found at: ",
+					time.Now().String())
 				} else {
-					println("mcc: socketPath Add did find socketPath", errAddSP)
+					println("mcc: socketPath Add did find socketPath at: ",
+					time.Now().String())
 				}
 				return cmdAdd(args)
 			})
@@ -273,9 +279,11 @@ var _ = Describe("DHCP Operations", func() {
 			return testutils.CmdDelWithArgs(args, func() error {
 				_, errDelSP := os.Stat(socketPath)
 				if errDelSP != nil {
-					println("mcc: socketPath Del error - socketPath not found", errDelSP)
+					println("mcc: socketPath Del error - socketPath not found at: ",
+					time.Now().String())
 				} else {
-					println("mcc: socketPath Del did find socketPath", errDelSP)
+					println("mcc: socketPath Del did find socketPath at: ",
+					time.Now().String())
 				}
 				return cmdDel(args)
 			})
@@ -300,6 +308,7 @@ var _ = Describe("DHCP Operations", func() {
 			StdinData:   []byte(conf),
 		}
 
+		println("mcc: It number 2: invoked at ", time.Now().String())
 		var addResult *current.Result
 		err := originalNS.Do(func(ns.NetNS) error {
 			defer GinkgoRecover()
@@ -307,9 +316,11 @@ var _ = Describe("DHCP Operations", func() {
 			r, _, err := testutils.CmdAddWithArgs(args, func() error {
 				_, errAddSP := os.Stat(socketPath)
 				if errAddSP != nil {
-					println("mcc: socketPath Add error - socketPath not found", errAddSP)
+					println("mcc: socketPath Add error - socketPath not found at: ",
+					time.Now().String())
 				} else {
-					println("mcc: socketPath Add did find socketPath", errAddSP)
+					println("mcc: socketPath Add did find socketPath at: ",
+					time.Now().String())
 				}
 				return cmdAdd(args)
 			})
@@ -339,9 +350,11 @@ var _ = Describe("DHCP Operations", func() {
 					return testutils.CmdDelWithArgs(args, func() error {
 						_, errDel1SP := os.Stat(socketPath)
 						if errDel1SP != nil {
-							println("mcc: socketPath Del 1 error - socketPath not found", errDel1SP)
+							println("mcc: socketPath Del 1 error - socketPath not found at: ",
+							time.Now().String())
 						} else {
-							println("mcc: socketPath Del 1 did find socketPath", errDel1SP)
+							println("mcc: socketPath Del 1 did find socketPath at: ",
+							time.Now().String())
 						}
 						return cmdDel(args)
 					})
@@ -356,9 +369,11 @@ var _ = Describe("DHCP Operations", func() {
 			return testutils.CmdDelWithArgs(args, func() error {
 				_, errDel2SP := os.Stat(socketPath)
 				if errDel2SP != nil {
-					println("mcc: socketPath Del 2 error - socketPath not found", errDel2SP)
+					println("mcc: socketPath Del 2 error - socketPath not found at: ",
+					time.Now().String())
 				} else {
-					println("mcc: socketPath Del 2 did find socketPath", errDel2SP)
+					println("mcc: socketPath Del 2 did find socketPath at: ",
+					time.Now().String())
 				}
 				return cmdDel(args)
 			})
