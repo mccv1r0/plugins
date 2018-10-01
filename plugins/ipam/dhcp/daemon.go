@@ -156,9 +156,9 @@ func runDaemon(pidfilePath string, hostPrefix string) error {
 	// since other goroutines (on separate threads) will change namespaces,
 	// ensure the RPC server does not get scheduled onto those
 
-var f *os.File
-var s string
-	
+	var f *os.File
+	var s string
+
 	runtime.LockOSThread()
 
 	// Write the pidfile
@@ -172,7 +172,7 @@ var s string
 	}
 
 	l, err := getListener()
-	
+
 	f, _ = os.OpenFile("/tmp/dhcp.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	s = fmt.Sprintf("%v: mcc: runDaemon getListener() returned at %v\n", os.Getpid(), time.Now().String())
 	_, _ = f.Write([]byte(s))
