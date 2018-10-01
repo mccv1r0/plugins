@@ -234,6 +234,7 @@ var _ = Describe("DHCP Operations", func() {
 	})
 
 	AfterEach(func() {
+		println("mcc: AfterEach: invoked at ", time.Now().String())
 		dhcpServerStopCh <- true
 		dhcpServerDone.Wait()
 		clientCmd.Process.Kill()
