@@ -16,7 +16,6 @@ package main
 
 import (
 	"fmt"
-	//"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
@@ -31,74 +30,9 @@ import (
 
 	"github.com/vishvananda/netlink"
 
-	"github.com/d2g/dhcp4"
-	"github.com/d2g/dhcp4server"
-	"github.com/d2g/dhcp4server/leasepool"
-	"github.com/d2g/dhcp4server/leasepool/memorypool"
-
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
-
-func dhcpServerStart2(netns ns.NetNS, leaseIP, serverIP net.IP, stopCh <-chan bool) (*sync.WaitGroup, error) {
-	// Add the expected IP to the pool
-	lp := memorypool.MemoryPool{}
-	err := lp.AddLease(leasepool.Lease{IP: dhcp4.IPAdd(leaseIP, 0)})
-	if err != nil {
-		return nil, fmt.Errorf("error adding IP to DHCP pool: %v", err)
-	}
-
-	err2 := lp.AddLease(leasepool.Lease{IP: dhcp4.IPAdd(net.IPv4(192, 168, 1, 6), 0)})
-	if err2 != nil {
-		return nil, fmt.Errorf("error adding IP to DHCP pool: %v", err2)
-	}
-
-	dhcpServer, err := dhcp4server.New(
-		net.IPv4(192, 168, 1, 1),
-		&lp,
-		dhcp4server.SetLocalAddr(net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 67}),
-		dhcp4server.SetRemoteAddr(net.UDPAddr{IP: net.IPv4bcast, Port: 68}),
-		dhcp4server.LeaseDuration(time.Minute*15),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create DHCP server: %v", err)
-	}
-
-	stopWg := sync.WaitGroup{}
-	stopWg.Add(2)
-	startWg := sync.WaitGroup{}
-	startWg.Add(2)
-
-	// Run DHCP server in a goroutine so it doesn't block the main thread
-	go func() {
-		defer GinkgoRecover()
-
-		err = netns.Do(func(ns.NetNS) error {
-			startWg.Done()
-			if err := dhcpServer.ListenAndServe(); err != nil {
-				// Log, but don't trap errors; the server will
-				// always report an error when stopped
-				GinkgoT().Logf("DHCP server finished with error: %v", err)
-			}
-			return nil
-		})
-		stopWg.Done()
-		// Trap any errors after the Done, to allow the main test thread
-		// to continue and clean up.  Otherwise the test hangs.
-		Expect(err).NotTo(HaveOccurred())
-	}()
-
-	// Stop DHCP server in another goroutine for the same reason
-	go func() {
-		startWg.Done()
-		<-stopCh
-		dhcpServer.Shutdown()
-		stopWg.Done()
-	}()
-	startWg.Wait()
-
-	return &stopWg, nil
-}
 
 var _ = Describe("DHCP Multiple Lease Operations", func() {
 	var originalNS, targetNS ns.NetNS
@@ -147,7 +81,6 @@ var _ = Describe("DHCP Multiple Lease Operations", func() {
 			err = netlink.LinkAdd(br)
 			Expect(err).NotTo(HaveOccurred())
 
-			//err = netlink.AddrAdd(br, &netlink.Addr{IPNet: &serverIP})
 			address := &netlink.Addr{IPNet: &net.IPNet{
 				IP:   net.IPv4(192, 168, 1, 1),
 				Mask: net.IPv4Mask(255, 255, 255, 0),
@@ -241,7 +174,7 @@ var _ = Describe("DHCP Multiple Lease Operations", func() {
 		})
 
 		// Start the DHCP server
-		dhcpServerDone, err = dhcpServerStart2(originalNS, net.IPv4(192, 168, 1, 5), serverIP.IP, dhcpServerStopCh)
+		dhcpServerDone, err = dhcpServerStart(originalNS, net.IPv4(192, 168, 1, 5), serverIP.IP, 2, dhcpServerStopCh)
 		Expect(err).NotTo(HaveOccurred())
 
 		// Start the DHCP client daemon
