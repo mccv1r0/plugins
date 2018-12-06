@@ -24,6 +24,7 @@ import (
 	"github.com/containernetworking/cni/pkg/types"
 	"github.com/containernetworking/cni/pkg/types/current"
 	"github.com/containernetworking/cni/pkg/version"
+	"github.com/vishvananda/netlink"
 
 	types020 "github.com/containernetworking/cni/pkg/types/020"
 )
@@ -59,12 +60,68 @@ type Address struct {
 
 func main() {
 	// TODO: implement plugin version
-	skel.PluginMain(cmdAdd, cmdGet, cmdDel, version.All, "TODO")
+	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.All, "TODO")
 }
 
-func cmdGet(args *skel.CmdArgs) error {
-	// TODO: implement
-	return fmt.Errorf("not implemented")
+func loadNetConf(bytes []byte) (*types.NetConf, string, error) {
+	n := &types.NetConf{}
+	if err := json.Unmarshal(bytes, n); err != nil {
+		return nil, "", fmt.Errorf("failed to load netconf: %v", err)
+	}
+	return n, n.CNIVersion, nil
+}
+
+func cmdCheck(args *skel.CmdArgs) error {
+	ipamConf, _, err := LoadIPAMConfig(args.StdinData, args.Args)
+	if err != nil {
+		return err
+	}
+
+	// Get PrevResult from stdin... store in RawPrevResult
+	n, _, err := loadNetConf(args.StdinData)
+	if err != nil {
+		return err
+	}
+
+	// Parse previous result.
+	if n.RawPrevResult == nil {
+		return fmt.Errorf("Required prevResult missing")
+	}
+
+	if err := version.ParsePrevResult(n); err != nil {
+		return err
+	}
+
+	result, err := current.NewResultFromResult(n.PrevResult)
+	if err != nil {
+		return err
+	}
+
+	// Each address in results.IPs must match what is in the container
+	for _, ips := range result.IPs {
+		match := false
+
+		ourAddr := netlink.Addr{IPNet: &ips.Address}
+		matchAddr, _ := netlink.ParseAddr(ourAddr.String())
+
+		// Loop through all ranges until we find the address found in container
+		for _, rangeset := range ipamConf.Addresses {
+			if rangeset.Address.IP.Equal(matchAddr.IPNet.IP) {
+				if rangeset.Gateway == nil {
+					match = true
+					break
+				} else if rangeset.Gateway.Equal(ips.Gateway) {
+					match = true
+					break
+				}
+			}
+		}
+		if match == false {
+			return fmt.Errorf("static: Failed to match addr %v on interface %v", ourAddr, args.IfName)
+		}
+	}
+
+	return nil
 }
 
 // canonicalizeIP makes sure a provided ip is in standard form

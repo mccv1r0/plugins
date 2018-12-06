@@ -15,6 +15,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"strings"
@@ -26,16 +27,71 @@ import (
 	"github.com/containernetworking/cni/pkg/types"
 	"github.com/containernetworking/cni/pkg/types/current"
 	"github.com/containernetworking/cni/pkg/version"
+	"github.com/vishvananda/netlink"
 )
 
 func main() {
 	// TODO: implement plugin version
-	skel.PluginMain(cmdAdd, cmdGet, cmdDel, version.All, "TODO")
+	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.All, "TODO")
 }
 
-func cmdGet(args *skel.CmdArgs) error {
-	// TODO: implement
-	return fmt.Errorf("not implemented")
+func loadNetConf(bytes []byte) (*types.NetConf, string, error) {
+	n := &types.NetConf{}
+	if err := json.Unmarshal(bytes, n); err != nil {
+		return nil, "", fmt.Errorf("failed to load netconf: %v", err)
+	}
+	return n, n.CNIVersion, nil
+}
+
+func cmdCheck(args *skel.CmdArgs) error {
+
+	ipamConf, _, err := allocator.LoadIPAMConfig(args.StdinData, args.Args)
+	if err != nil {
+		return err
+	}
+
+	// Get PrevResult from stdin... store in RawPrevResult
+	n, _, err := loadNetConf(args.StdinData)
+	if err != nil {
+		return err
+	}
+
+	// Parse previous result.
+	if n.RawPrevResult == nil {
+		return fmt.Errorf("Required prevResult missing")
+	}
+
+	if err := version.ParsePrevResult(n); err != nil {
+		return err
+	}
+
+	result, err := current.NewResultFromResult(n.PrevResult)
+	if err != nil {
+		return err
+	}
+
+	// Each address in results.IPs must match what is in the container
+	for _, ips := range result.IPs {
+		ourAddr := netlink.Addr{IPNet: &ips.Address}
+		match := false
+
+		requestedIPs := map[string]net.IP{} //net.IP cannot be a key
+		matchAddr, _ := netlink.ParseAddr(ourAddr.String())
+		requestedIPs[ourAddr.String()] = matchAddr.IP
+
+		// Loop through all ranges until we find the address found in container
+		for _, rangeset := range ipamConf.Ranges {
+			if rangeset.Contains(matchAddr.IP) {
+				match = true
+				break
+			}
+		}
+		if match == false {
+			return fmt.Errorf("host-local: Failed to match addr %v on interface %v", ourAddr, args.IfName)
+		}
+	}
+
+	return nil
 }
 
 func cmdAdd(args *skel.CmdArgs) error {

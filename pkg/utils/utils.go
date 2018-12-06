@@ -17,6 +17,12 @@ package utils
 import (
 	"crypto/sha512"
 	"fmt"
+	"net"
+	"strings"
+
+	"github.com/containernetworking/cni/pkg/types"
+	"github.com/containernetworking/cni/pkg/types/current"
+	"github.com/vishvananda/netlink"
 )
 
 const (
@@ -38,4 +44,98 @@ func FormatChainName(name string, id string) string {
 // rule identification within iptables.
 func FormatComment(name string, id string) string {
 	return fmt.Sprintf("name: %q id: %q", name, id)
+}
+
+func CheckPrevResultIPs(ifName string, resultIPs []*current.IPConfig) error {
+
+	// Ensure ips
+	for _, ips := range resultIPs {
+		ourAddr := netlink.Addr{IPNet: &ips.Address}
+		match := false
+
+		link, err := netlink.LinkByName(ifName)
+		if err != nil {
+			return fmt.Errorf("Cannot find container link %v", ifName)
+		}
+
+		addrList, err := netlink.AddrList(link, netlink.FAMILY_ALL)
+		if err != nil {
+			return fmt.Errorf("Cannot obtain List of IP Addresses")
+		}
+
+		for _, addr := range addrList {
+			if addr.Equal(ourAddr) {
+				match = true
+				break
+			}
+		}
+		if match == false {
+			return fmt.Errorf("Failed to match addr %v on interface %v", ourAddr, ifName)
+		}
+
+		// Convert the host/prefixlen to just prefix for route lookup.
+		_, ourPrefix, err := net.ParseCIDR(ourAddr.String())
+
+		findGwy := &netlink.Route{Dst: ourPrefix}
+		routeFilter := netlink.RT_FILTER_DST
+		var family int
+
+		switch {
+		case ips.Version == "4":
+			family = netlink.FAMILY_V4
+		case ips.Version == "6":
+			family = netlink.FAMILY_V6
+		default:
+			return fmt.Errorf("Invalid IP Version %v for interface %v", ips.Version, ifName)
+		}
+
+		gwy, err := netlink.RouteListFiltered(family, findGwy, routeFilter)
+		if err != nil {
+			return fmt.Errorf("Error %v trying to find Gateway %v for interface %v", err, ips.Gateway, ifName)
+		}
+		if gwy == nil {
+			return fmt.Errorf("Failed to find Gateway %v for interface %v", ips.Gateway, ifName)
+		}
+	}
+
+	return nil
+}
+
+func CheckPrevResultRoute(resultRoutes []*types.Route) error {
+
+	// Ensure that each static route in prevResults is found in the routing table
+	for _, route := range resultRoutes {
+		find := &netlink.Route{Dst: &route.Dst, Gw: route.GW}
+		routeFilter := netlink.RT_FILTER_DST | netlink.RT_FILTER_GW
+		var family int
+
+		switch {
+		case route.Dst.IP.To4() != nil:
+			family = netlink.FAMILY_V4
+			// Default route needs Dst set to nil
+			if strings.Compare(route.Dst.String(), "0.0.0.0/0") == 0 {
+				find = &netlink.Route{Dst: nil, Gw: route.GW}
+				routeFilter = netlink.RT_FILTER_DST
+			}
+		case len(route.Dst.IP) == net.IPv6len:
+			family = netlink.FAMILY_V6
+			// Default route needs Dst set to nil
+			if route.Dst.String() == "::/0" {
+				find = &netlink.Route{Dst: nil, Gw: route.GW}
+				routeFilter = netlink.RT_FILTER_DST
+			}
+		default:
+			return fmt.Errorf("Invalid static route found in prevResult %v", route)
+		}
+
+		wasFound, err := netlink.RouteListFiltered(family, find, routeFilter)
+		if err != nil {
+			return fmt.Errorf("Route in prevResult %v route table lookup error %v", route, err)
+		}
+		if wasFound == nil {
+			return fmt.Errorf("Route in prevResult %v not found in routing table", route)
+		}
+	}
+
+	return nil
 }
