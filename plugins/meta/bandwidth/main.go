@@ -52,34 +52,19 @@ type PluginConf struct {
 
 	// RuntimeConfig *struct{} `json:"runtimeConfig"`
 
-	RawPrevResult *map[string]interface{} `json:"prevResult"`
-	PrevResult    *current.Result         `json:"-"`
+	//RawPrevResult *map[string]interface{} `json:"prevResult"`
+	//PrevResult    *current.Result         `json:"-"`
 	*BandwidthEntry
 }
 
 // parseConfig parses the supplied configuration (and prevResult) from stdin.
-func parseConfig(stdin []byte) (*PluginConf, error) {
+func parseConfig(stdin []byte, checkCmd bool) (*PluginConf, error) {
 	conf := PluginConf{}
 
 	if err := json.Unmarshal(stdin, &conf); err != nil {
 		return nil, fmt.Errorf("failed to parse network configuration: %v", err)
 	}
 
-	if conf.RawPrevResult != nil {
-		resultBytes, err := json.Marshal(conf.RawPrevResult)
-		if err != nil {
-			return nil, fmt.Errorf("could not serialize prevResult: %v", err)
-		}
-		res, err := version.NewResult(conf.CNIVersion, resultBytes)
-		if err != nil {
-			return nil, fmt.Errorf("could not parse prevResult: %v", err)
-		}
-		conf.RawPrevResult = nil
-		conf.PrevResult, err = current.NewResultFromResult(res)
-		if err != nil {
-			return nil, fmt.Errorf("could not convert result to current version: %v", err)
-		}
-	}
 	bandwidth := getBandwidth(&conf)
 	if bandwidth != nil {
 		err := validateRateAndBurst(bandwidth.IngressRate, bandwidth.IngressBurst)
@@ -89,6 +74,23 @@ func parseConfig(stdin []byte) (*PluginConf, error) {
 		err = validateRateAndBurst(bandwidth.EgressRate, bandwidth.EgressBurst)
 		if err != nil {
 			return nil, err
+		}
+	}
+
+	if checkCmd {
+		return &conf, nil
+	}
+
+	if conf.RawPrevResult != nil {
+		var err error
+		if err = version.ParsePrevResult(&conf.NetConf); err != nil {
+			return nil, fmt.Errorf("could not parse prevResult: %v", err)
+		}
+
+		//result, err := current.NewResultFromResult(conf.PrevResult)
+		_, err = current.NewResultFromResult(conf.PrevResult)
+		if err != nil {
+			return nil, fmt.Errorf("could not convert result to current version: %v", err)
 		}
 	}
 
@@ -153,7 +155,7 @@ func getHostInterface(interfaces []*current.Interface) (*current.Interface, erro
 }
 
 func cmdAdd(args *skel.CmdArgs) error {
-	conf, err := parseConfig(args.StdinData)
+	conf, err := parseConfig(args.StdinData, false)
 	if err != nil {
 		return err
 	}
@@ -167,7 +169,11 @@ func cmdAdd(args *skel.CmdArgs) error {
 		return fmt.Errorf("must be called as chained plugin")
 	}
 
-	hostInterface, err := getHostInterface(conf.PrevResult.Interfaces)
+	result, err := current.NewResultFromResult(conf.PrevResult)
+	if err != nil {
+		return fmt.Errorf("could not convert result to current version: %v", err)
+	}
+	hostInterface, err := getHostInterface(result.Interfaces)
 	if err != nil {
 		return err
 	}
@@ -200,7 +206,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 			return err
 		}
 
-		conf.PrevResult.Interfaces = append(conf.PrevResult.Interfaces, &current.Interface{
+		result.Interfaces = append(result.Interfaces, &current.Interface{
 			Name: ifbDeviceName,
 			Mac:  ifbDevice.Attrs().HardwareAddr.String(),
 		})
@@ -210,11 +216,11 @@ func cmdAdd(args *skel.CmdArgs) error {
 		}
 	}
 
-	return types.PrintResult(conf.PrevResult, conf.CNIVersion)
+	return types.PrintResult(result, conf.CNIVersion)
 }
 
 func cmdDel(args *skel.CmdArgs) error {
-	conf, err := parseConfig(args.StdinData)
+	conf, err := parseConfig(args.StdinData, false)
 	if err != nil {
 		return err
 	}
@@ -233,10 +239,130 @@ func cmdDel(args *skel.CmdArgs) error {
 
 func main() {
 	// TODO: implement plugin version
-	skel.PluginMain(cmdAdd, cmdGet, cmdDel, version.PluginSupports("0.3.0", "0.3.1", version.Current()), "TODO")
+	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.PluginSupports("0.3.0", "0.3.1", version.Current()), "TODO")
 }
 
-func cmdGet(args *skel.CmdArgs) error {
-	// TODO: implement
-	return fmt.Errorf("not implemented")
+func SafeQdiscList(link netlink.Link) ([]netlink.Qdisc, error) {
+	qdiscs, err := netlink.QdiscList(link)
+	if err != nil {
+		return nil, err
+	}
+	result := []netlink.Qdisc{}
+	for _, qdisc := range qdiscs {
+		// filter out pfifo_fast qdiscs because
+		// older kernels don't return them
+		_, pfifo := qdisc.(*netlink.PfifoFast)
+		if !pfifo {
+			result = append(result, qdisc)
+		}
+	}
+	return result, nil
+}
+
+func cmdCheck(args *skel.CmdArgs) error {
+	bwConf, err := parseConfig(args.StdinData, true)
+	if err != nil {
+		return err
+	}
+
+	// Parse previous result.
+	if bwConf.RawPrevResult == nil {
+		return fmt.Errorf("Required prevResult missing")
+	}
+
+	if err := version.ParsePrevResult(&bwConf.NetConf); err != nil {
+		return err
+	}
+
+	result, err := current.NewResultFromResult(bwConf.PrevResult)
+	if err != nil {
+		return err
+	}
+
+	hostInterface, err := getHostInterface(result.Interfaces)
+	if err != nil {
+		return err
+	}
+	link, err := netlink.LinkByName(hostInterface.Name)
+	if err != nil {
+		return err
+	}
+
+	bandwidth := getBandwidth(bwConf)
+
+	if bandwidth.IngressRate > 0 && bandwidth.IngressBurst > 0 {
+		rateInBytes := bandwidth.IngressRate / 8
+		burstInBytes := bandwidth.IngressBurst / 8
+		bufferInBytes := buffer(uint64(rateInBytes), uint32(burstInBytes))
+		latency := latencyInUsec(latencyInMillis)
+		limitInBytes := limit(uint64(rateInBytes), latency, uint32(burstInBytes))
+
+		qdiscs, err := SafeQdiscList(link)
+		if err != nil {
+			return err
+		}
+		if len(qdiscs) == 0 {
+			return fmt.Errorf("Failed to find qdisc")
+		}
+
+		for _, qdisc := range qdiscs {
+			tbf, isTbf := qdisc.(*netlink.Tbf)
+			if !isTbf {
+				break
+			}
+			if tbf.Rate != uint64(rateInBytes) {
+				return fmt.Errorf("Rate doesn't match")
+			}
+			if tbf.Limit != uint32(limitInBytes) {
+				return fmt.Errorf("Limit doesn't match")
+			}
+			if tbf.Buffer != uint32(bufferInBytes) {
+				return fmt.Errorf("Buffer doesn't match")
+			}
+		}
+	}
+
+	if bandwidth.EgressRate > 0 && bandwidth.EgressBurst > 0 {
+		rateInBytes := bandwidth.EgressRate / 8
+		burstInBytes := bandwidth.EgressBurst / 8
+		bufferInBytes := buffer(uint64(rateInBytes), uint32(burstInBytes))
+		latency := latencyInUsec(latencyInMillis)
+		limitInBytes := limit(uint64(rateInBytes), latency, uint32(burstInBytes))
+
+		ifbDeviceName, err := getIfbDeviceName(bwConf.Name, args.ContainerID)
+		if err != nil {
+			return err
+		}
+
+		ifbDevice, err := netlink.LinkByName(ifbDeviceName)
+		if err != nil {
+			return fmt.Errorf("get ifb device: %s", err)
+		}
+
+		qdiscs, err := SafeQdiscList(ifbDevice)
+		if err != nil {
+			return err
+		}
+		if len(qdiscs) == 0 {
+			return fmt.Errorf("Failed to find qdisc")
+		}
+
+		for _, qdisc := range qdiscs {
+			tbf, isTbf := qdisc.(*netlink.Tbf)
+			if !isTbf {
+				break
+			}
+			if tbf.Rate != uint64(rateInBytes) {
+				return fmt.Errorf("Rate doesn't match")
+			}
+			if tbf.Limit != uint32(limitInBytes) {
+				return fmt.Errorf("Limit doesn't match")
+			}
+			if tbf.Buffer != uint32(bufferInBytes) {
+				return fmt.Errorf("Buffer doesn't match")
+			}
+		}
+	}
+
+	return nil
 }

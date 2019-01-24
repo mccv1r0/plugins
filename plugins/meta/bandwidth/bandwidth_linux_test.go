@@ -35,6 +35,76 @@ import (
 	"github.com/onsi/gomega/gexec"
 )
 
+type PluginV3Conf struct {
+	types.NetConf
+
+	RuntimeConfig struct {
+		Bandwidth *BandwidthEntry `json:"bandwidth,omitempty"`
+	} `json:"runtimeConfig,omitempty"`
+
+	// RuntimeConfig *struct{} `json:"runtimeConfig"`
+
+	RawPrevResult *map[string]interface{} `json:"prevResult"`
+	PrevResult    *current.Result         `json:"-"`
+	*BandwidthEntry
+}
+
+type Net struct {
+	Name          string `json:"name"`
+	CNIVersion    string `json:"cniVersion"`
+	Type          string `json:"type,omitempty"`
+	RuntimeConfig struct {
+		Bandwidth *BandwidthEntry `json:"bandwidth,omitempty"`
+	} `json:"runtimeConfig,omitempty"`
+	*BandwidthEntry
+	DNS           types.DNS              `json:"dns"`
+	RawPrevResult map[string]interface{} `json:"prevResult,omitempty"`
+	PrevResult    current.Result         `json:"-"`
+}
+
+func buildOneConfig(name, cniVersion string, orig *Net, prevResult types.Result) (*Net, error) {
+	var err error
+
+	inject := map[string]interface{}{
+		"name":       name,
+		"cniVersion": cniVersion,
+	}
+	// Add previous plugin result
+	if prevResult != nil {
+		inject["prevResult"] = prevResult
+	}
+
+	// Ensure every config uses the same name and version
+	config := make(map[string]interface{})
+
+	confBytes, err := json.Marshal(orig)
+	if err != nil {
+		return nil, err
+	}
+
+	err = json.Unmarshal(confBytes, &config)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal existing network bytes: %s", err)
+	}
+
+	for key, value := range inject {
+		config[key] = value
+	}
+
+	newBytes, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+
+	conf := &Net{}
+	if err := json.Unmarshal(newBytes, &conf); err != nil {
+		return nil, fmt.Errorf("error parsing configuration: %s", err)
+	}
+
+	return conf, nil
+
+}
+
 var _ = Describe("bandwidth test", func() {
 	var (
 		hostNs          ns.NetNS
@@ -643,8 +713,7 @@ var _ = Describe("bandwidth test", func() {
 
 				containerWithTbfResult, err := current.GetResult(containerWithTbfRes)
 				Expect(err).NotTo(HaveOccurred())
-
-				tbfPluginConf := PluginConf{}
+				tbfPluginConf := PluginV3Conf{}
 				tbfPluginConf.RuntimeConfig.Bandwidth = &BandwidthEntry{
 					IngressBurst: burstInBits,
 					IngressRate:  rateInBits,
@@ -663,7 +732,6 @@ var _ = Describe("bandwidth test", func() {
 					IPs:        containerWithTbfResult.IPs,
 					Interfaces: containerWithTbfResult.Interfaces,
 				}
-
 				conf, err := json.Marshal(tbfPluginConf)
 				Expect(err).NotTo(HaveOccurred())
 
@@ -676,6 +744,180 @@ var _ = Describe("bandwidth test", func() {
 
 				_, out, err := testutils.CmdAdd(containerWithTbfNS.Path(), args.ContainerID, "", []byte(conf), func() error { return cmdAdd(args) })
 				Expect(err).NotTo(HaveOccurred(), string(out))
+
+				return nil
+			})).To(Succeed())
+
+			By("starting a tcp server on both containers")
+			portServerWithTbf, echoServerWithTbf, err = startEchoServerInNamespace(containerWithTbfNS)
+			Expect(err).NotTo(HaveOccurred())
+			portServerWithoutTbf, echoServerWithoutTbf, err = startEchoServerInNamespace(containerWithoutTbfNS)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		AfterEach(func() {
+			containerWithTbfNS.Close()
+			containerWithoutTbfNS.Close()
+			if echoServerWithoutTbf != nil {
+				echoServerWithoutTbf.Kill()
+			}
+			if echoServerWithTbf != nil {
+				echoServerWithTbf.Kill()
+			}
+		})
+
+		Measure("limits ingress traffic on veth device", func(b Benchmarker) {
+			var runtimeWithLimit time.Duration
+			var runtimeWithoutLimit time.Duration
+
+			By("gather timing statistics about both containers")
+			By("sending tcp traffic to the container that has traffic shaped", func() {
+				runtimeWithLimit = b.Time("with tbf", func() {
+					result, err := current.GetResult(containerWithTbfRes)
+					Expect(err).NotTo(HaveOccurred())
+
+					makeTcpClientInNS(hostNs.Path(), result.IPs[0].Address.IP.String(), portServerWithTbf, packetInBytes)
+				})
+			})
+
+			By("sending tcp traffic to the container that does not have traffic shaped", func() {
+				runtimeWithoutLimit = b.Time("without tbf", func() {
+					result, err := current.GetResult(containerWithoutTbfRes)
+					Expect(err).NotTo(HaveOccurred())
+
+					makeTcpClientInNS(hostNs.Path(), result.IPs[0].Address.IP.String(), portServerWithoutTbf, packetInBytes)
+				})
+			})
+
+			Expect(runtimeWithLimit).To(BeNumerically(">", runtimeWithoutLimit+1000*time.Millisecond))
+		}, 1)
+	})
+
+	Context("when chaining bandwidth plugin with PTP using 0.4.0 config", func() {
+		var ptpConf string
+		var rateInBits int
+		var burstInBits int
+		var packetInBytes int
+		var containerWithoutTbfNS ns.NetNS
+		var containerWithTbfNS ns.NetNS
+		var portServerWithTbf int
+		var portServerWithoutTbf int
+
+		var containerWithTbfRes types.Result
+		var containerWithoutTbfRes types.Result
+		var echoServerWithTbf *gexec.Session
+		var echoServerWithoutTbf *gexec.Session
+
+		BeforeEach(func() {
+			rateInBytes := 1000
+			rateInBits = rateInBytes * 8
+			burstInBits = rateInBits * 2
+			packetInBytes = rateInBytes * 25
+
+			ptpConf = `{
+    "cniVersion": "0.4.0",
+    "name": "mynet",
+    "type": "ptp",
+    "ipMasq": true,
+    "mtu": 512,
+    "ipam": {
+        "type": "host-local",
+        "subnet": "10.1.2.0/24"
+    }
+}`
+
+			containerWithTbfIFName := "ptp0"
+			containerWithoutTbfIFName := "ptp1"
+
+			var err error
+			containerWithTbfNS, err = testutils.NewNS()
+			Expect(err).NotTo(HaveOccurred())
+
+			containerWithoutTbfNS, err = testutils.NewNS()
+			Expect(err).NotTo(HaveOccurred())
+
+			By("create two containers, and use the bandwidth plugin on one of them")
+			Expect(hostNs.Do(func(ns.NetNS) error {
+				defer GinkgoRecover()
+
+				containerWithTbfRes, _, err = testutils.CmdAdd(containerWithTbfNS.Path(), "dummy", containerWithTbfIFName, []byte(ptpConf), func() error {
+					r, err := invoke.DelegateAdd(context.TODO(), "ptp", []byte(ptpConf), nil)
+					Expect(r.Print()).To(Succeed())
+
+					return err
+				})
+				Expect(err).NotTo(HaveOccurred())
+
+				containerWithoutTbfRes, _, err = testutils.CmdAdd(containerWithoutTbfNS.Path(), "dummy2", containerWithoutTbfIFName, []byte(ptpConf), func() error {
+					r, err := invoke.DelegateAdd(context.TODO(), "ptp", []byte(ptpConf), nil)
+					Expect(r.Print()).To(Succeed())
+
+					return err
+				})
+				Expect(err).NotTo(HaveOccurred())
+
+				containerWithTbfResult, err := current.GetResult(containerWithTbfRes)
+				Expect(err).NotTo(HaveOccurred())
+
+				tbfPluginConf := &Net{}
+				err = json.Unmarshal([]byte(ptpConf), &tbfPluginConf)
+				Expect(err).NotTo(HaveOccurred())
+
+				tbfPluginConf.RuntimeConfig.Bandwidth = &BandwidthEntry{
+					IngressBurst: burstInBits,
+					IngressRate:  rateInBits,
+					EgressBurst:  burstInBits,
+					EgressRate:   rateInBits,
+				}
+				tbfPluginConf.Type = "bandwidth"
+
+				cniVersion := "0.4.0"
+				newConf, err := buildOneConfig("mynet", cniVersion, tbfPluginConf, containerWithTbfResult)
+				Expect(err).NotTo(HaveOccurred())
+
+				conf, err := json.Marshal(newConf)
+				Expect(err).NotTo(HaveOccurred())
+
+				args := &skel.CmdArgs{
+					ContainerID: "dummy3",
+					Netns:       containerWithTbfNS.Path(),
+					IfName:      containerWithTbfIFName,
+					StdinData:   []byte(conf),
+				}
+
+				result, out, err := testutils.CmdAdd(containerWithTbfNS.Path(), args.ContainerID, "", []byte(conf), func() error { return cmdAdd(args) })
+				//_, out, err := testutils.CmdAdd(containerWithTbfNS.Path(), args.ContainerID, "", []byte(conf), func() error { return cmdAdd(args) })
+				Expect(err).NotTo(HaveOccurred(), string(out))
+
+				// TODO
+				checkConf := &Net{}
+				err = json.Unmarshal([]byte(ptpConf), &checkConf)
+				Expect(err).NotTo(HaveOccurred())
+
+				checkConf.RuntimeConfig.Bandwidth = &BandwidthEntry{
+					IngressBurst: burstInBits,
+					IngressRate:  rateInBits,
+					EgressBurst:  burstInBits,
+					EgressRate:   rateInBits,
+				}
+				checkConf.Type = "bandwidth"
+
+				newCheckConf, err := buildOneConfig("mynet", cniVersion, checkConf, result)
+				Expect(err).NotTo(HaveOccurred())
+
+				confString, err := json.Marshal(newCheckConf)
+				Expect(err).NotTo(HaveOccurred())
+
+				args = &skel.CmdArgs{
+					ContainerID: "dummy3",
+					Netns:       containerWithTbfNS.Path(),
+					IfName:      containerWithTbfIFName,
+					StdinData:   []byte(confString),
+				}
+
+				err = testutils.CmdCheck(containerWithTbfNS.Path(), args.ContainerID, "", []byte(confString), func() error { return cmdCheck(args) })
+				Expect(err).NotTo(HaveOccurred())
+				//
 
 				return nil
 			})).To(Succeed())
