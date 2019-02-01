@@ -87,7 +87,6 @@ func parseConfig(stdin []byte, checkCmd bool) (*PluginConf, error) {
 			return nil, fmt.Errorf("could not parse prevResult: %v", err)
 		}
 
-		//result, err := current.NewResultFromResult(conf.PrevResult)
 		_, err = current.NewResultFromResult(conf.PrevResult)
 		if err != nil {
 			return nil, fmt.Errorf("could not convert result to current version: %v", err)
