@@ -31,21 +31,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-type Net struct {
-	Name       string            `json:"name"`
-	CNIVersion string            `json:"cniVersion"`
-	Type       string            `json:"type,omitempty"`
-	SysCtl     map[string]string `json:"sysctl"`
-	Mac        string            `json:"mac,omitempty"`
-	Promisc    bool              `json:"promisc,omitempty"`
-	Mtu        int               `json:"mtu,omitempty"`
-	//IPAM       *allocator.IPAMConfig `json:"ipam"`
-	DNS           types.DNS              `json:"dns"`
-	RawPrevResult map[string]interface{} `json:"prevResult,omitempty"`
-	PrevResult    current.Result         `json:"-"`
-}
-
-func buildOneConfig(name, cniVersion string, orig *Net, prevResult types.Result) (*Net, error) {
+func buildOneConfig(name, cniVersion string, orig *TuningConf, prevResult types.Result) (*TuningConf, []byte, error) {
 	var err error
 
 	inject := map[string]interface{}{
@@ -62,12 +48,12 @@ func buildOneConfig(name, cniVersion string, orig *Net, prevResult types.Result)
 
 	confBytes, err := json.Marshal(orig)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	err = json.Unmarshal(confBytes, &config)
 	if err != nil {
-		return nil, fmt.Errorf("unmarshal existing network bytes: %s", err)
+		return nil, nil, fmt.Errorf("unmarshal existing network bytes: %s", err)
 	}
 
 	for key, value := range inject {
@@ -76,15 +62,15 @@ func buildOneConfig(name, cniVersion string, orig *Net, prevResult types.Result)
 
 	newBytes, err := json.Marshal(config)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	conf := &Net{}
+	conf := &TuningConf{}
 	if err := json.Unmarshal(newBytes, &conf); err != nil {
-		return nil, fmt.Errorf("error parsing configuration: %s", err)
+		return nil, nil, fmt.Errorf("error parsing configuration: %s", err)
 	}
 
-	return conf, nil
+	return conf, newBytes, nil
 
 }
 
@@ -452,15 +438,12 @@ var _ = Describe("tuning plugin", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(link.Attrs().Promisc).To(Equal(1))
 
-			n := &Net{}
+			n := &TuningConf{}
 			err = json.Unmarshal([]byte(conf), &n)
 			Expect(err).NotTo(HaveOccurred())
 
 			cniVersion := "0.4.0"
-			newConf, err := buildOneConfig("testConfig", cniVersion, n, r)
-			Expect(err).NotTo(HaveOccurred())
-
-			confString, err := json.Marshal(newConf)
+			_, confString, err := buildOneConfig("testConfig", cniVersion, n, r)
 			Expect(err).NotTo(HaveOccurred())
 
 			args.StdinData = confString
@@ -527,15 +510,12 @@ var _ = Describe("tuning plugin", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(link.Attrs().MTU).To(Equal(1454))
 
-			n := &Net{}
+			n := &TuningConf{}
 			err = json.Unmarshal([]byte(conf), &n)
 			Expect(err).NotTo(HaveOccurred())
 
 			cniVersion := "0.4.0"
-			newConf, err := buildOneConfig("testConfig", cniVersion, n, r)
-			Expect(err).NotTo(HaveOccurred())
-
-			confString, err := json.Marshal(newConf)
+			_, confString, err := buildOneConfig("testConfig", cniVersion, n, r)
 			Expect(err).NotTo(HaveOccurred())
 
 			args.StdinData = confString
@@ -604,15 +584,12 @@ var _ = Describe("tuning plugin", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(link.Attrs().HardwareAddr).To(Equal(hw))
 
-			n := &Net{}
+			n := &TuningConf{}
 			err = json.Unmarshal([]byte(conf), &n)
 			Expect(err).NotTo(HaveOccurred())
 
 			cniVersion := "0.4.0"
-			newConf, err := buildOneConfig("testConfig", cniVersion, n, r)
-			Expect(err).NotTo(HaveOccurred())
-
-			confString, err := json.Marshal(newConf)
+			_, confString, err := buildOneConfig("testConfig", cniVersion, n, r)
 			Expect(err).NotTo(HaveOccurred())
 
 			args.StdinData = confString
@@ -681,15 +658,12 @@ var _ = Describe("tuning plugin", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(link.Attrs().HardwareAddr).To(Equal(hw))
 
-			n := &Net{}
+			n := &TuningConf{}
 			err = json.Unmarshal([]byte(conf), &n)
 			Expect(err).NotTo(HaveOccurred())
 
 			cniVersion := "0.4.0"
-			newConf, err := buildOneConfig("testConfig", cniVersion, n, r)
-			Expect(err).NotTo(HaveOccurred())
-
-			confString, err := json.Marshal(newConf)
+			_, confString, err := buildOneConfig("testConfig", cniVersion, n, r)
 			Expect(err).NotTo(HaveOccurred())
 
 			args.StdinData = confString

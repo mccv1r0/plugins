@@ -35,34 +35,7 @@ import (
 	"github.com/onsi/gomega/gexec"
 )
 
-type PluginV3Conf struct {
-	types.NetConf
-
-	RuntimeConfig struct {
-		Bandwidth *BandwidthEntry `json:"bandwidth,omitempty"`
-	} `json:"runtimeConfig,omitempty"`
-
-	// RuntimeConfig *struct{} `json:"runtimeConfig"`
-
-	RawPrevResult *map[string]interface{} `json:"prevResult"`
-	PrevResult    *current.Result         `json:"-"`
-	*BandwidthEntry
-}
-
-type Net struct {
-	Name          string `json:"name"`
-	CNIVersion    string `json:"cniVersion"`
-	Type          string `json:"type,omitempty"`
-	RuntimeConfig struct {
-		Bandwidth *BandwidthEntry `json:"bandwidth,omitempty"`
-	} `json:"runtimeConfig,omitempty"`
-	*BandwidthEntry
-	DNS           types.DNS              `json:"dns"`
-	RawPrevResult map[string]interface{} `json:"prevResult,omitempty"`
-	PrevResult    current.Result         `json:"-"`
-}
-
-func buildOneConfig(name, cniVersion string, orig *Net, prevResult types.Result) (*Net, error) {
+func buildOneConfig(name, cniVersion string, orig *PluginConf, prevResult types.Result) (*PluginConf, []byte, error) {
 	var err error
 
 	inject := map[string]interface{}{
@@ -79,12 +52,12 @@ func buildOneConfig(name, cniVersion string, orig *Net, prevResult types.Result)
 
 	confBytes, err := json.Marshal(orig)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	err = json.Unmarshal(confBytes, &config)
 	if err != nil {
-		return nil, fmt.Errorf("unmarshal existing network bytes: %s", err)
+		return nil, nil, fmt.Errorf("unmarshal existing network bytes: %s", err)
 	}
 
 	for key, value := range inject {
@@ -93,15 +66,15 @@ func buildOneConfig(name, cniVersion string, orig *Net, prevResult types.Result)
 
 	newBytes, err := json.Marshal(config)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	conf := &Net{}
+	conf := &PluginConf{}
 	if err := json.Unmarshal(newBytes, &conf); err != nil {
-		return nil, fmt.Errorf("error parsing configuration: %s", err)
+		return nil, nil, fmt.Errorf("error parsing configuration: %s", err)
 	}
 
-	return conf, nil
+	return conf, newBytes, nil
 
 }
 
@@ -713,7 +686,7 @@ var _ = Describe("bandwidth test", func() {
 
 				containerWithTbfResult, err := current.GetResult(containerWithTbfRes)
 				Expect(err).NotTo(HaveOccurred())
-				tbfPluginConf := PluginV3Conf{}
+				tbfPluginConf := PluginConf{}
 				tbfPluginConf.RuntimeConfig.Bandwidth = &BandwidthEntry{
 					IngressBurst: burstInBits,
 					IngressRate:  rateInBits,
@@ -723,7 +696,7 @@ var _ = Describe("bandwidth test", func() {
 				tbfPluginConf.Name = "mynet"
 				tbfPluginConf.CNIVersion = "0.3.0"
 				tbfPluginConf.Type = "bandwidth"
-				tbfPluginConf.RawPrevResult = &map[string]interface{}{
+				tbfPluginConf.RawPrevResult = map[string]interface{}{
 					"ips":        containerWithTbfResult.IPs,
 					"interfaces": containerWithTbfResult.Interfaces,
 				}
@@ -859,7 +832,7 @@ var _ = Describe("bandwidth test", func() {
 				containerWithTbfResult, err := current.GetResult(containerWithTbfRes)
 				Expect(err).NotTo(HaveOccurred())
 
-				tbfPluginConf := &Net{}
+				tbfPluginConf := &PluginConf{}
 				err = json.Unmarshal([]byte(ptpConf), &tbfPluginConf)
 				Expect(err).NotTo(HaveOccurred())
 
@@ -870,27 +843,22 @@ var _ = Describe("bandwidth test", func() {
 					EgressRate:   rateInBits,
 				}
 				tbfPluginConf.Type = "bandwidth"
-
 				cniVersion := "0.4.0"
-				newConf, err := buildOneConfig("mynet", cniVersion, tbfPluginConf, containerWithTbfResult)
-				Expect(err).NotTo(HaveOccurred())
-
-				conf, err := json.Marshal(newConf)
+				_, newConfBytes, err := buildOneConfig("mynet", cniVersion, tbfPluginConf, containerWithTbfResult)
 				Expect(err).NotTo(HaveOccurred())
 
 				args := &skel.CmdArgs{
 					ContainerID: "dummy3",
 					Netns:       containerWithTbfNS.Path(),
 					IfName:      containerWithTbfIFName,
-					StdinData:   []byte(conf),
+					StdinData:   newConfBytes,
 				}
 
-				result, out, err := testutils.CmdAdd(containerWithTbfNS.Path(), args.ContainerID, "", []byte(conf), func() error { return cmdAdd(args) })
-				//_, out, err := testutils.CmdAdd(containerWithTbfNS.Path(), args.ContainerID, "", []byte(conf), func() error { return cmdAdd(args) })
+				result, out, err := testutils.CmdAdd(containerWithTbfNS.Path(), args.ContainerID, "", newConfBytes, func() error { return cmdAdd(args) })
 				Expect(err).NotTo(HaveOccurred(), string(out))
 
-				// TODO
-				checkConf := &Net{}
+				// Do CNI Check
+				checkConf := &PluginConf{}
 				err = json.Unmarshal([]byte(ptpConf), &checkConf)
 				Expect(err).NotTo(HaveOccurred())
 
@@ -902,22 +870,18 @@ var _ = Describe("bandwidth test", func() {
 				}
 				checkConf.Type = "bandwidth"
 
-				newCheckConf, err := buildOneConfig("mynet", cniVersion, checkConf, result)
-				Expect(err).NotTo(HaveOccurred())
-
-				confString, err := json.Marshal(newCheckConf)
+				_, newCheckBytes, err := buildOneConfig("mynet", cniVersion, checkConf, result)
 				Expect(err).NotTo(HaveOccurred())
 
 				args = &skel.CmdArgs{
 					ContainerID: "dummy3",
 					Netns:       containerWithTbfNS.Path(),
 					IfName:      containerWithTbfIFName,
-					StdinData:   []byte(confString),
+					StdinData:   newCheckBytes,
 				}
 
-				err = testutils.CmdCheck(containerWithTbfNS.Path(), args.ContainerID, "", []byte(confString), func() error { return cmdCheck(args) })
+				err = testutils.CmdCheck(containerWithTbfNS.Path(), args.ContainerID, "", newCheckBytes, func() error { return cmdCheck(args) })
 				Expect(err).NotTo(HaveOccurred())
-				//
 
 				return nil
 			})).To(Succeed())

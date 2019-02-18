@@ -50,15 +50,11 @@ type PluginConf struct {
 		Bandwidth *BandwidthEntry `json:"bandwidth,omitempty"`
 	} `json:"runtimeConfig,omitempty"`
 
-	// RuntimeConfig *struct{} `json:"runtimeConfig"`
-
-	//RawPrevResult *map[string]interface{} `json:"prevResult"`
-	//PrevResult    *current.Result         `json:"-"`
 	*BandwidthEntry
 }
 
 // parseConfig parses the supplied configuration (and prevResult) from stdin.
-func parseConfig(stdin []byte, checkCmd bool) (*PluginConf, error) {
+func parseConfig(stdin []byte) (*PluginConf, error) {
 	conf := PluginConf{}
 
 	if err := json.Unmarshal(stdin, &conf); err != nil {
@@ -75,10 +71,6 @@ func parseConfig(stdin []byte, checkCmd bool) (*PluginConf, error) {
 		if err != nil {
 			return nil, err
 		}
-	}
-
-	if checkCmd {
-		return &conf, nil
 	}
 
 	if conf.RawPrevResult != nil {
@@ -154,7 +146,7 @@ func getHostInterface(interfaces []*current.Interface) (*current.Interface, erro
 }
 
 func cmdAdd(args *skel.CmdArgs) error {
-	conf, err := parseConfig(args.StdinData, false)
+	conf, err := parseConfig(args.StdinData)
 	if err != nil {
 		return err
 	}
@@ -219,7 +211,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 }
 
 func cmdDel(args *skel.CmdArgs) error {
-	conf, err := parseConfig(args.StdinData, false)
+	conf, err := parseConfig(args.StdinData)
 	if err != nil {
 		return err
 	}
@@ -259,23 +251,18 @@ func SafeQdiscList(link netlink.Link) ([]netlink.Qdisc, error) {
 }
 
 func cmdCheck(args *skel.CmdArgs) error {
-	bwConf, err := parseConfig(args.StdinData, true)
+	bwConf, err := parseConfig(args.StdinData)
 	if err != nil {
 		return err
 	}
 
-	// Parse previous result.
-	if bwConf.RawPrevResult == nil {
-		return fmt.Errorf("Required prevResult missing")
-	}
-
-	if err := version.ParsePrevResult(&bwConf.NetConf); err != nil {
-		return err
+	if bwConf.PrevResult == nil {
+		return fmt.Errorf("must be called as a chained plugin")
 	}
 
 	result, err := current.NewResultFromResult(bwConf.PrevResult)
 	if err != nil {
-		return err
+		return fmt.Errorf("could not convert result to current version: %v", err)
 	}
 
 	hostInterface, err := getHostInterface(result.Interfaces)
